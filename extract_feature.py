@@ -2,6 +2,9 @@ import numpy as np
 from PIL import Image
 from pathlib import Path
 from scipy.fft import fft2, fftshift, dctn
+from scipy.ndimage import laplace
+from scipy.stats import skew, kurtosis
+from skimage.feature import local_binary_pattern
 from joblib import Parallel, delayed
 from tqdm import tqdm
 import pickle
@@ -30,15 +33,34 @@ def dct_stats(gray: np.ndarray) -> np.ndarray:
     dct = dctn(blocks, axes=(2,3), norm='ortho')
     return dct.mean(axis=(0,1)).ravel()
 
+def pixel_stats(arr: np.ndarray, gray: np.ndarray) -> np.ndarray:
+    feats = []
+
+    for c in range(3):
+        ch = arr[:, :, c].ravel()
+        feats += [ch.mean(), ch.std(), skew(ch), kurtosis(ch)]
+
+    lap = laplace(gray).ravel()
+    feats += [lap.mean(), lap.std(), np.abs(lap).mean()]
+
+    lbp = local_binary_pattern(gray, P=8, R=1, method='uniform')
+    hist, _ = np.histogram(lbp, bins=10, range=(0, 10), density=True)
+    feats += hist.tolist()
+
+    dx = np.diff(gray, axis=1).ravel()
+    dy = np.diff(gray, axis=0).ravel()
+    feats += [dx.std(), dy.std(), np.abs(dx).mean(), np.abs(dy).mean()]
+
+    return np.array(feats)
 def extract(img_path: Path) -> np.ndarray:
     img = Image.open(img_path).convert('RGB')
     arr = np.array(img, dtype=np.float32) / 255.0
+    gray = arr.mean(axis=2)
 
     fft_feats = np.concatenate([
         fft_radial(arr[:, :, c]) for c in range(3)
     ])
 
-    gray = arr.mean(axis=2)
     dct_feats = dct_stats(gray)
 
     slope_feats = np.array([
@@ -50,7 +72,8 @@ def extract(img_path: Path) -> np.ndarray:
         for c in range(3)
     ])
 
-    return np.concatenate([fft_feats, dct_feats, slope_feats])
+    pix_feats = pixel_stats(arr, gray)
+    return np.concatenate([fft_feats, dct_feats, slope_feats, pix_feats])
 
 def process_split(split: str, data_root: Path):
     X, y, paths = [], [], []
