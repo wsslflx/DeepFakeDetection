@@ -40,7 +40,7 @@ def extract(img_path: Path) -> np.ndarray:
 
     gray = arr.mean(axis=2)
     dct_feats = dct_stats(gray)
-    
+
     slope_feats = np.array([
         np.polyfit(
             np.log1p(np.arange(128)),

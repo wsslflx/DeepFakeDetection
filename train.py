@@ -14,11 +14,11 @@ print(f"Train: {X_train.shape}, Val: {X_val.shape}")
 
 # Train
 clf = xgb.XGBClassifier(
-    n_estimators=500,
-    max_depth=8,
-    learning_rate=0.1,
+    n_estimators=1000,
+    max_depth=10,
+    learning_rate=0.05,
     subsample=0.8,
-    colsample_bytree=0.8,
+    colsample_bytree=0.6,
     use_label_encoder=False,
     eval_metric="mlogloss",
     n_jobs=10,
@@ -29,7 +29,9 @@ clf.fit(
     X_train, y_train,
     eval_set=[(X_val, y_val)],
     verbose=50,
+    early_stopping_rounds=30,
 )
+
 
 # Evaluate
 preds = clf.predict(X_val)
