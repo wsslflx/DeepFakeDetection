@@ -31,11 +31,26 @@ def dct_stats(gray: np.ndarray) -> np.ndarray:
     return dct.mean(axis=(0,1)).ravel()
 
 def extract(img_path: Path) -> np.ndarray:
-    img = Image.open(img_path).convert('L')
-    gray = np.array(img, dtype=np.float32) / 255.0
-    f1 = fft_radial(gray)
-    f2 = dct_stats(gray)
-    return np.concatenate([f1, f2])
+    img = Image.open(img_path).convert('RGB')
+    arr = np.array(img, dtype=np.float32) / 255.0
+
+    fft_feats = np.concatenate([
+        fft_radial(arr[:, :, c]) for c in range(3)
+    ])
+
+    gray = arr.mean(axis=2)
+    dct_feats = dct_stats(gray)
+    
+    slope_feats = np.array([
+        np.polyfit(
+            np.log1p(np.arange(128)),
+            np.log1p(fft_radial(arr[:, :, c])),
+            1
+        )[0]
+        for c in range(3)
+    ])
+
+    return np.concatenate([fft_feats, dct_feats, slope_feats])
 
 def process_split(split: str, data_root: Path):
     X, y, paths = [], [], []
