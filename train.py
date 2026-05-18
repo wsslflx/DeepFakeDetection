@@ -19,19 +19,18 @@ clf = xgb.XGBClassifier(
     learning_rate=0.05,
     subsample=0.8,
     colsample_bytree=0.6,
-    use_label_encoder=False,
     eval_metric="mlogloss",
+    early_stopping_rounds=30,
     n_jobs=10,
     tree_method="hist",
     random_state=42,
 )
+
 clf.fit(
     X_train, y_train,
     eval_set=[(X_val, y_val)],
     verbose=50,
-    early_stopping_rounds=30,
 )
-
 
 # Evaluate
 preds = clf.predict(X_val)
