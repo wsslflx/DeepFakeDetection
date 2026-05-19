@@ -2,3 +2,4 @@ data
 data22.tar.gz
 .pt
 *.pt
+*.npy
