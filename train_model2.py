@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 import torchvision.models as models
+from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 from PIL import Image
 from pathlib import Path
 from tqdm import tqdm
@@ -23,9 +24,10 @@ if DEVICE.type == "cuda":
 DATA_ROOT   = Path("data")
 BATCH_SIZE  = 64
 EPOCHS      = 30
-LR          = 1e-4
+LR          = 3e-5       # was 1e-4
 NUM_CLASSES = 9
 NUM_WORKERS = 4
+PATIENCE    = 5
 SAVE_PATH   = Path("best_model.pt")
 
 LABEL_MAP = {
@@ -36,11 +38,14 @@ LABEL_MAP = {
 }
 IDX_TO_NAME = {v: k for k, v in LABEL_MAP.items()}
 
-
+# stronger augmentation to prevent content shortcut learning
 train_transform = transforms.Compose([
     transforms.Resize(256),
-    transforms.CenterCrop(224),
+    transforms.RandomCrop(224),
     transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip(),
+    transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+    transforms.RandomGrayscale(p=0.2),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                          std= [0.229, 0.224, 0.225]),
@@ -58,7 +63,7 @@ val_transform = transforms.Compose([
 class ImageDataset(Dataset):
     def __init__(self, split: str, transform):
         self.transform = transform
-        self.items = []  # (path, label)
+        self.items = []
 
         split_dir = DATA_ROOT / split
         if split == "test":
@@ -80,16 +85,24 @@ class ImageDataset(Dataset):
         img = Image.open(path).convert("RGB")
         return self.transform(img), label
 
+
 def build_model(num_classes: int) -> nn.Module:
     model = models.efficientnet_b0(
         weights=models.EfficientNet_B0_Weights.DEFAULT
     )
+    # freeze all layers
+    for p in model.parameters():
+        p.requires_grad = False
+    # unfreeze only last 2 blocks and classifier
+    for p in model.features[6:].parameters():
+        p.requires_grad = True
     in_features = model.classifier[1].in_features
     model.classifier = nn.Sequential(
-        nn.Dropout(p=0.3),
+        nn.Dropout(p=0.5),          # was 0.3
         nn.Linear(in_features, num_classes),
     )
     return model
+
 
 def train_epoch(model, loader, optimizer, criterion):
     model.train()
@@ -105,6 +118,7 @@ def train_epoch(model, loader, optimizer, criterion):
         correct    += (logits.argmax(1) == labels).sum().item()
         total      += len(labels)
     return total_loss / total, correct / total
+
 
 def val_epoch(model, loader, criterion):
     model.eval()
@@ -123,6 +137,7 @@ def val_epoch(model, loader, criterion):
             all_labels.extend(labels.cpu().tolist())
     return total_loss / total, correct / total, all_preds, all_labels
 
+
 def per_class_accuracy(preds, labels, num_classes):
     counts   = np.zeros(num_classes, dtype=int)
     corrects = np.zeros(num_classes, dtype=int)
@@ -131,8 +146,8 @@ def per_class_accuracy(preds, labels, num_classes):
         corrects[l] += int(p == l)
     return corrects / (counts + 1e-8)
 
+
 if __name__ == "__main__":
-    # Datasets
     train_ds = ImageDataset("train", train_transform)
     val_ds   = ImageDataset("val",   val_transform)
     print(f"Train: {len(train_ds)} images")
@@ -149,15 +164,22 @@ if __name__ == "__main__":
 
     model     = build_model(NUM_CLASSES).to(DEVICE)
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=EPOCHS, eta_min=1e-6
+
+    # stronger weight decay, lower LR
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=LR, weight_decay=0.1   # was 0.01
     )
 
-    best_val_acc = 0.0
-    history = []
+    # warmup for 2 epochs then cosine decay
+    warmup    = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=2)
+    cosine    = CosineAnnealingLR(optimizer, T_max=EPOCHS - 2, eta_min=1e-6)
+    scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[2])
 
-    print(f"\nTraining EfficientNet-B0 for {EPOCHS} epochs\n")
+    best_val_acc    = 0.0
+    epochs_no_improve = 0
+    history         = []
+
+    print(f"\nTraining EfficientNet-B0 for up to {EPOCHS} epochs (patience={PATIENCE})\n")
 
     for epoch in range(1, EPOCHS + 1):
         print(f"Epoch {epoch}/{EPOCHS}")
@@ -166,7 +188,6 @@ if __name__ == "__main__":
         val_loss, val_acc, preds, labels = val_epoch(model, val_loader, criterion)
         scheduler.step()
 
-        # per-class breakdown
         per_class = per_class_accuracy(preds, labels, NUM_CLASSES)
 
         print(f"  loss: train={train_loss:.4f}  val={val_loss:.4f}")
@@ -184,6 +205,7 @@ if __name__ == "__main__":
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
+            epochs_no_improve = 0
             torch.save({
                 "epoch": epoch,
                 "model_state": model.state_dict(),
@@ -193,6 +215,12 @@ if __name__ == "__main__":
                 "label_map": LABEL_MAP,
             }, SAVE_PATH)
             print(f"  ↑ saved best model (val acc: {best_val_acc:.4f})")
+        else:
+            epochs_no_improve += 1
+            print(f"  no improvement ({epochs_no_improve}/{PATIENCE})")
+            if epochs_no_improve >= PATIENCE:
+                print(f"\nEarly stopping at epoch {epoch}")
+                break
 
         print()
 
