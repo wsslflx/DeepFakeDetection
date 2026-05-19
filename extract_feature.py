@@ -42,8 +42,8 @@ def pixel_stats(arr: np.ndarray, gray: np.ndarray) -> np.ndarray:
 
     lap = laplace(gray).ravel()
     feats += [lap.mean(), lap.std(), np.abs(lap).mean()]
-
-    lbp = local_binary_pattern(gray, P=8, R=1, method='uniform')
+    gray_uint8 = (gray * 255).astype(np.uint8)
+    lbp = local_binary_pattern(gray_uint8, P=8, R=1, method='uniform')
     hist, _ = np.histogram(lbp, bins=10, range=(0, 10), density=True)
     feats += hist.tolist()
 
