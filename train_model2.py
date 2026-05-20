@@ -22,7 +22,7 @@ if DEVICE.type == "cuda":
     print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
 DATA_ROOT   = Path("data")
-BATCH_SIZE  = 64
+BATCH_SIZE  = 32
 EPOCHS      = 30
 LR          = 3e-5       # was 1e-4
 NUM_CLASSES = 9
@@ -85,24 +85,25 @@ class ImageDataset(Dataset):
         img = Image.open(path).convert("RGB")
         return self.transform(img), label
 
-
 def build_model(num_classes: int) -> nn.Module:
-    model = models.efficientnet_b0(
-        weights=models.EfficientNet_B0_Weights.DEFAULT
-    )
-    # freeze all layers
+    model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+
+    # freeze early layers (layer1 and layer2)
     for p in model.parameters():
         p.requires_grad = False
-    # unfreeze only last 2 blocks and classifier
-    for p in model.features[6:].parameters():
+    for p in model.layer3.parameters():
         p.requires_grad = True
-    in_features = model.classifier[1].in_features
-    model.classifier = nn.Sequential(
-        nn.Dropout(p=0.5),          # was 0.3
-        nn.Linear(in_features, num_classes),
+    for p in model.layer4.parameters():
+        p.requires_grad = True
+    for p in model.fc.parameters():
+        p.requires_grad = True
+
+    # replace classifier head
+    model.fc = nn.Sequential(
+        nn.Dropout(p=0.5),
+        nn.Linear(model.fc.in_features, num_classes),
     )
     return model
-
 
 def train_epoch(model, loader, optimizer, criterion):
     model.train()
